@@ -1,0 +1,18 @@
+services:
+  jetson-yolo-cpp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: jetson-yolo-cpp:latest
+    runtime: nvidia
+    network_mode: host
+    restart: unless-stopped
+    devices:
+      - /dev/video0:/dev/video0
+    volumes:
+      - ../models:/app/models
+      - ../config.yaml:/app/config.yaml:ro
+      - ../logs:/app/logs
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility

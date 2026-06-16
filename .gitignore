@@ -1,0 +1,39 @@
+# Build output
+build/
+
+# TensorRT engines (device-specific, must be generated locally)
+models/engines/
+*.engine
+*.trt
+
+# ONNX models (large binary files — download separately, see README)
+*.onnx
+
+# Logs
+logs/
+*.log
+
+# Test snapshots
+snapshots/
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache (if any scripts used)
+__pycache__/
+*.pyc
+
+# Keep empty directory structure in git
+!models/.gitkeep
+!models/engines/.gitkeep
+!logs/.gitkeep

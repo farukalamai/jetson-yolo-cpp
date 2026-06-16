@@ -1,0 +1,45 @@
+camera:
+  device: "/dev/video0"
+  width: 1920
+  height: 1080
+  fps: 30
+
+model:
+  onnx_path: "models/yolo26s.onnx"
+  engine_path: "models/engines/yolo26s.engine"
+  labels_path: "models/coco.names"
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  input_width: 640
+  input_height: 640
+  use_fp16: true
+
+# Classes to count (COCO class IDs). Empty list = count all classes.
+# Common vehicle IDs: 2=car, 3=motorcycle, 5=bus, 7=truck
+count_classes: [2, 3, 5, 7]
+
+# Virtual counting line defined by two points (x, y) in pixel coordinates.
+# Draw this line across the road in the camera's field of view.
+counting_line:
+  x1: 0
+  y1: 540
+  x2: 1920
+  y2: 540
+
+tracker:
+  # ByteTrack parameters
+  det_thresh: 0.3
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+  track_buffer: 25
+  frame_rate: 30
+
+schedule:
+  start_hour: 6   # 6 AM
+  stop_hour: 18   # 6 PM
+
+logging:
+  level: "info"     # debug, info, warn, error
+  log_file: "logs/detections.log"
+  flush_every_seconds: 5

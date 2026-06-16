@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop jetson-yolo-cpp at 6 PM daily
+
+[Timer]
+OnCalendar=*-*-* 18:00:00
+Persistent=true
+Unit=vehicle-counter.service
+
+[Install]
+WantedBy=timers.target
