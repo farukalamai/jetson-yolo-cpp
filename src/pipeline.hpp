@@ -1,33 +1,50 @@
 #pragma once
 
 #include "camera.hpp"
-#include "counter.hpp"
 
 #include <yolos/tasks/detection.hpp>
+#include <yolos/tasks/segmentation.hpp>
 #include <motcpp/trackers/bytetrack.hpp>
 #include <spdlog/spdlog.h>
 #include <Eigen/Dense>
 #include <opencv2/opencv.hpp>
-#include <unordered_set>
 #include <vector>
+
+enum class Mode { Detection, Segmentation };
 
 class Pipeline {
 public:
+    // Detection mode
     Pipeline(Camera& camera,
              yolos::det::YOLODetector& detector,
              motcpp::trackers::ByteTrack& tracker,
-             LineCounter& counter,
-             const std::vector<int>& count_classes,
              float conf_thresh,
              float iou_thresh)
         : camera_(camera)
-        , detector_(detector)
         , tracker_(tracker)
-        , counter_(counter)
-        , count_classes_(count_classes.begin(), count_classes.end())
         , conf_thresh_(conf_thresh)
         , iou_thresh_(iou_thresh)
+        , mode_(Mode::Detection)
+        , det_detector_(&detector)
+        , seg_detector_(nullptr)
     {}
+
+    // Segmentation mode
+    Pipeline(Camera& camera,
+             yolos::seg::YOLOSegDetector& detector,
+             motcpp::trackers::ByteTrack& tracker,
+             float conf_thresh,
+             float iou_thresh)
+        : camera_(camera)
+        , tracker_(tracker)
+        , conf_thresh_(conf_thresh)
+        , iou_thresh_(iou_thresh)
+        , mode_(Mode::Segmentation)
+        , det_detector_(nullptr)
+        , seg_detector_(&detector)
+    {}
+
+    Mode mode() const { return mode_; }
 
     // Runs one frame. Returns false when camera stops delivering frames.
     bool tick() {
@@ -35,56 +52,50 @@ public:
         if (!camera_.read(frame) || frame.empty())
             return false;
 
-        // Detect
-        auto detections = detector_.detect(frame, conf_thresh_, iou_thresh_);
-
-        // Filter to target classes only (empty set = accept all)
-        if (!count_classes_.empty()) {
-            detections.erase(
-                std::remove_if(detections.begin(), detections.end(),
-                    [&](const yolos::det::Detection& d) {
-                        return count_classes_.find(d.classId) == count_classes_.end();
-                    }),
-                detections.end());
-        }
-
-        // Build motcpp detection matrix [x1,y1,x2,y2,conf,cls]
-        Eigen::MatrixXf dets(static_cast<int>(detections.size()), 6);
-        for (int i = 0; i < static_cast<int>(detections.size()); ++i) {
-            const auto& d = detections[i];
-            dets(i, 0) = static_cast<float>(d.box.x);
-            dets(i, 1) = static_cast<float>(d.box.y);
-            dets(i, 2) = static_cast<float>(d.box.x + d.box.width);
-            dets(i, 3) = static_cast<float>(d.box.y + d.box.height);
-            dets(i, 4) = d.conf;
-            dets(i, 5) = static_cast<float>(d.classId);
-        }
-
-        // Track
+        Eigen::MatrixXf dets = buildDetMatrix(frame);
         Eigen::MatrixXf tracks = tracker_.update(dets, frame);
 
-        // Count
-        counter_.update(tracks);
-
-        const auto& c = counter_.counts();
-        spdlog::debug("frame | detections={} tracks={} entered={} exited={}",
-                      detections.size(), tracks.rows(), c.entered, c.exited);
-
+        spdlog::debug("frame | detections={} tracks={}", dets.rows(), tracks.rows());
         return true;
     }
 
-    // Log current counts at info level — call periodically from main loop
-    void logCounts() const {
-        const auto& c = counter_.counts();
-        spdlog::info("counts | entered={} exited={} net={}", c.entered, c.exited, c.entered - c.exited);
+protected:
+    // Shared helper — runs inference and returns motcpp detection matrix [x1,y1,x2,y2,conf,cls]
+    Eigen::MatrixXf buildDetMatrix(const cv::Mat& frame) {
+        if (mode_ == Mode::Detection) {
+            auto detections = det_detector_->detect(frame, conf_thresh_, iou_thresh_);
+            Eigen::MatrixXf m(static_cast<int>(detections.size()), 6);
+            for (int i = 0; i < static_cast<int>(detections.size()); ++i) {
+                const auto& d = detections[i];
+                m(i, 0) = static_cast<float>(d.box.x);
+                m(i, 1) = static_cast<float>(d.box.y);
+                m(i, 2) = static_cast<float>(d.box.x + d.box.width);
+                m(i, 3) = static_cast<float>(d.box.y + d.box.height);
+                m(i, 4) = d.conf;
+                m(i, 5) = static_cast<float>(d.classId);
+            }
+            return m;
+        } else {
+            auto results = seg_detector_->segment(frame, conf_thresh_, iou_thresh_);
+            Eigen::MatrixXf m(static_cast<int>(results.size()), 6);
+            for (int i = 0; i < static_cast<int>(results.size()); ++i) {
+                const auto& r = results[i];
+                m(i, 0) = static_cast<float>(r.box.x);
+                m(i, 1) = static_cast<float>(r.box.y);
+                m(i, 2) = static_cast<float>(r.box.x + r.box.width);
+                m(i, 3) = static_cast<float>(r.box.y + r.box.height);
+                m(i, 4) = r.conf;
+                m(i, 5) = static_cast<float>(r.classId);
+            }
+            return m;
+        }
     }
 
-private:
     Camera& camera_;
-    yolos::det::YOLODetector& detector_;
     motcpp::trackers::ByteTrack& tracker_;
-    LineCounter& counter_;
-    std::unordered_set<int> count_classes_;
     float conf_thresh_;
     float iou_thresh_;
+    Mode mode_;
+    yolos::det::YOLODetector*    det_detector_;
+    yolos::seg::YOLOSegDetector* seg_detector_;
 };

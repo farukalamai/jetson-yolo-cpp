@@ -19,6 +19,9 @@ snapshots/
 # Claude Code
 .claude/
 
+# Personal notes
+FUTURE.md
+
 # OS
 .DS_Store
 Thumbs.db
@@ -37,3 +40,5 @@ __pycache__/
 !models/.gitkeep
 !models/engines/.gitkeep
 !logs/.gitkeep
+
+CURRENT_ENVIRONMENT.md

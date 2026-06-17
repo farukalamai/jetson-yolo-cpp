@@ -1,6 +1,6 @@
 # jetson-yolo-cpp
 
-Production-ready real-time object detection and counting on NVIDIA Jetson using YOLO + TensorRT in C++. Supports any YOLO model. Deployable via Docker.
+Real-time object detection, segmentation and tracking on NVIDIA Jetson using YOLO + TensorRT in C++. Supports detection and instance segmentation modes. Drop in any YOLO ONNX model, plug in a camera, and run — natively or via Docker.
 
 ---
 
@@ -8,8 +8,7 @@ Production-ready real-time object detection and counting on NVIDIA Jetson using 
 
 - NVIDIA Jetson Orin NX (JetPack 6.2+)
 - USB or CSI camera
-- Docker with NVIDIA Container Toolkit
-- YOLO ONNX model (e.g. `yolo26s.onnx`)
+- YOLO ONNX model
 
 ---
 
@@ -22,27 +21,33 @@ git clone https://github.com/faruk/jetson-yolo-cpp.git
 cd jetson-yolo-cpp
 ```
 
-### 2. Download and add your ONNX model
-
-ONNX models are not included in the repo (large binary files). Download from Ultralytics HuggingFace:
+### 2. Install dependencies
 
 ```bash
-# Download yolo26s (small) — recommended for Jetson
-wget -O models/yolo26s.onnx \
-  https://huggingface.co/Ultralytics/YOLO26/resolve/main/yolo26s.onnx
+sudo apt install -y cmake libeigen3-dev libspdlog-dev libyaml-cpp-dev
 ```
 
-Or export from the PyTorch model:
+See [SETUP_DEPENDENCIES.md](SETUP_DEPENDENCIES.md) for the full setup guide including Docker.
+
+### 3. Download a YOLO model
+
+Export an ONNX model using the Ultralytics package:
 
 ```bash
 pip install ultralytics
+
+# Detection model
 yolo export model=yolo26s.pt format=onnx imgsz=640
 mv yolo26s.onnx models/
+
+# Segmentation model (adds pixel masks)
+yolo export model=yolo26s-seg.pt format=onnx imgsz=640
+mv yolo26s-seg.onnx models/
 ```
 
-Available variants: `yolo26n` (nano), `yolo26s` (small), `yolo26m` (medium), `yolo26l` (large)
+Available variants: `yolo26n`, `yolo26s`, `yolo26m`, `yolo26l` — each has a `-seg` variant for segmentation.
 
-### 3. Build the TensorRT engine
+### 4. Build the TensorRT engine
 
 Run once per model per device. Takes 5–15 minutes.
 
@@ -62,195 +67,89 @@ Or use the helper script:
 ./scripts/build_engine.sh models/yolo26s.onnx
 ```
 
-### 4. Configure
+### 5. Configure
 
-Edit `config.yaml` to match your setup:
+Edit `config.yaml` to match your camera and model:
 
 ```yaml
 camera:
-  device: "/dev/video0"     # your camera device
-  width: 1280
-  height: 720
+  device: "/dev/video0"
+  width: 1920
+  height: 1080
 
 model:
+  mode: "detection"          # "detection" or "segmentation"
   engine_path: "models/engines/yolo26s.engine"
-
-# COCO class IDs to count: 2=car, 3=motorcycle, 5=bus, 7=truck
-count_classes: [2, 3, 5, 7]
-
-# Counting line — two points across the road in pixel coordinates
-counting_line:
-  x1: 0
-  y1: 360
-  x2: 1280
-  y2: 360
-
-schedule:
-  start_hour: 6    # 6 AM
-  stop_hour: 18    # 6 PM
 ```
 
-**Tip:** To find the right counting line coordinates, take a snapshot from your camera:
+Switch to segmentation by changing mode and pointing to a `-seg` engine:
+
+```yaml
+model:
+  mode: "segmentation"
+  engine_path: "models/engines/yolo26s-seg.engine"
+```
+
+### 6. Build
 
 ```bash
-python3 -c "
-import cv2
-cap = cv2.VideoCapture('/dev/video0')
-ret, frame = cap.read()
-if ret:
-    cv2.imwrite('/tmp/camera_test.jpg', frame)
-    print('Saved to /tmp/camera_test.jpg')
-cap.release()
-"
-```
-
-Open `/tmp/camera_test.jpg`, decide where across the road the line should be, and update `y1`/`y2` in `config.yaml`.
-
-### 5. Build the Docker image
-
-```bash
-docker compose -f docker/docker-compose.yml build
-```
-
-### 6. Run
-
-```bash
-docker compose -f docker/docker-compose.yml up
-```
-
-Counts are logged every 30 seconds:
-
-```
-[info] counts | entered=5 exited=3 net=2
-```
-
-Stop with `Ctrl+C` or:
-
-```bash
-docker compose -f docker/docker-compose.yml down
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 8
 ```
 
 ---
 
-## Build Natively (without Docker)
+## Run
 
-Faster for development and testing.
+### Test first (recommended)
+
+Run the test tool to verify camera, model and tracker are working before going to production:
 
 ```bash
-# Install dependencies first (see SETUP_DEPENDENCIES.md)
+./build/test_detection config.yaml
+```
 
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel 8
+Terminal output:
+
+```
+CamFPS      InferenceFPS  Detections  Tracks    New IDs
+----------------------------------------------------------------------
+  >> New track: ID#1 ID#2  -> saved: snapshots/frame_45_ID#1_ID#2_.png
+28.4        47.8          2           2
+  >> New track: ID#4       -> saved: snapshots/frame_120_ID#4_.png
+27.9        47.6          3           3
+```
+
+- **CamFPS** — full pipeline speed (camera + inference + tracking)
+- **InferenceFPS** — YOLO model speed only
+- Every new track ID triggers an annotated PNG snapshot saved to `snapshots/`
+- In segmentation mode, snapshots include pixel masks drawn over detected objects
+
+Stop with `Ctrl+C`.
+
+### Production (native)
+
+```bash
 ./build/jetson-yolo-cpp config.yaml
 ```
 
----
+Runs headless — detects and tracks continuously, logs to terminal and `logs/app.log`. Stop with `Ctrl+C`.
 
-## 24/7 Scheduled Deployment (6 AM – 6 PM)
-
-Install systemd timers that automatically start the container at 6 AM and stop it at 6 PM daily:
+### Production (Docker)
 
 ```bash
-sudo ./scripts/install_service.sh
-```
-
-Check status:
-
-```bash
-sudo systemctl status vehicle-counter.service
-sudo systemctl list-timers
-```
-
-Start or stop manually:
-
-```bash
-sudo systemctl start vehicle-counter.service
-sudo systemctl stop vehicle-counter.service
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml up
 ```
 
 ---
 
-## Swap the Model
+## Acknowledgements
 
-1. Drop the new `.onnx` into `models/`
-2. Build its engine:
-    ```bash
-    /usr/src/tensorrt/bin/trtexec \
-        --onnx=models/yolo26n.onnx \
-        --saveEngine=models/engines/yolo26n.engine \
-        --fp16 \
-        --workspace=4096 \
-        --iterations=10 \
-        --warmUp=500
-    ```
-3. Update `config.yaml`:
-    ```yaml
-    model:
-      onnx_path: "models/yolo26n.onnx"
-      engine_path: "models/engines/yolo26n.engine"
-    ```
-4. Restart the container:
-    ```bash
-    docker compose -f docker/docker-compose.yml restart
-    ```
-
----
-
-## Swap the Camera
-
-Update `config.yaml`:
-
-```yaml
-camera:
-  device: "/dev/video1"     # different USB camera
-```
-
-Or for an RTSP stream, edit `src/camera.hpp` to replace the GStreamer pipeline source.
-
----
-
-## Project Structure
-
-```
-jetson-yolo-cpp/
-├── CMakeLists.txt
-├── config.yaml                  # all settings — model, camera, line, schedule
-├── src/
-│   ├── main.cpp                 # entry point, schedule check, main loop
-│   ├── camera.hpp               # GStreamer V4L2 capture
-│   ├── counter.hpp              # line crossing → enter/exit counts
-│   └── pipeline.hpp             # frame → detect → track → count
-├── models/
-│   ├── coco.names               # class labels
-│   └── engines/                 # TRT engines go here (gitignored)
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── deploy/
-│   ├── vehicle-counter.service  # systemd service
-│   ├── start.timer              # 06:00 daily
-│   └── stop.timer               # 18:00 daily
-└── scripts/
-    ├── build_engine.sh          # ONNX → TRT engine
-    └── install_service.sh       # install systemd timers
-```
-
----
-
-## Dependencies
-
-See [SETUP_DEPENDENCIES.md](SETUP_DEPENDENCIES.md) for full installation instructions.
-
-| Component | Version |
-|---|---|
-| JetPack | 6.2.1 |
-| CUDA | 12.6 |
-| TensorRT | 10.3.0 |
-| OpenCV | 4.8.0 |
-| Docker | 29.5+ |
-
----
-
-## Environment
-
-See [CURRENT_ENVIRONMENT.md](CURRENT_ENVIRONMENT.md) for a full audit of the Jetson environment.
+- **[YOLOs-CPP-TensorRT](https://github.com/Geekgineer/YOLOs-CPP-TensorRT)** — C++ TensorRT inference library for YOLO v5–v26
+- **[motcpp](https://github.com/Geekgineer/motcpp)** — C++ multi-object tracking (ByteTrack and others)
+- **[Ultralytics YOLO](https://github.com/ultralytics/ultralytics)** — YOLO model family
+- **[spdlog](https://github.com/gabime/spdlog)** — fast C++ logging
+- **[yaml-cpp](https://github.com/jbeder/yaml-cpp)** — YAML configuration parsing
+- **[OpenCV](https://opencv.org)** — camera capture and image I/O
+- **[Eigen](https://eigen.tuxfamily.org)** — linear algebra for the tracker
